@@ -22,6 +22,13 @@
  *      Boston, MA 02110-1301, USA.
  */
 /*
+ *  Version 0.9.4v (22 Sep 2020)
+ *  Modification made by Skinkie and implemented by Bruce Quinton (Zanoroy@gmail.com)
+ *   - Issue #154 created by Skinkie (https://github.com/skinkie) - Difference between output (pipes versus spaces)
+ *   - This also changed the delimiter to a | rather than a space for Tone and Unknown message types
+ *  Modification made by HobbyKonijn and implemented by Bruce Quinton (Zanoroy@gmail.com)
+ *   - Issue #153 created by HobbyKonijn (https://github.com/HobbyKonijn) - Group message per line
+ *   - Interduced flag (within demod_flex.c) to allow the user to list group messages on a line per capcode - helps when using Pagermon
  *  Version 0.9.3v (28 Jan 2020)
  *  Modification made by bierviltje and implemented by Bruce Quinton (Zanoroy@gmail.com)
  *   - Issue #123 created by bierviltje (https://github.com/bierviltje) - Feature request: FLEX: put group messages in an array/list
@@ -107,7 +114,8 @@
 
 #define FREQ_SAMP 22050
 #define FILTLEN 1
-#define REPORT_GROUP_CODES 1 // Report each cleared faulty group capcode : 0 = Each on a new line; 1 = All on the same line;
+#define REPORT_GROUP_CODES 1          // Report each cleared faulty group capcode : 0 = Each on a new line; 1 = All on the same line;
+#define GroupCalls         1          // Cluster CapCodes -> GroupCalls = 1, CapCodes per line -> GroupCalls = 0
 
 #define FLEX_SYNC_MARKER 0xA6C6AAAAul // Synchronisation code marker for FLEX
 #define SLICE_THRESHOLD 0.667         // For 4 level code, levels 0 and 3 have 3 times the amplitude of levels 1 and 2, so quantise at 2/3
@@ -603,34 +611,6 @@ static void parse_alphanumeric(struct Flex *flex, unsigned int *phaseptr, char P
 
   message[currentChar] = '\0';
 
-  /*
-        verbprintf(0,  "FLEX: %04i-%02i-%02i %02i:%02i:%02i %i/%i/%c/%c %02i.%03i [%09lld] ALN ", 
-            gmt->tm_year+1900, gmt->tm_mon+1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec,
-                        flex->Sync.baud, flex->Sync.levels, frag_flag, PhaseNo, flex->FIW.cycleno, flex->FIW.frameno, flex->Decode.capcode);
-
-        verbprintf(0, "%s\n", message);
-
-        if(flex_groupmessage == 1) {
-                int groupbit = flex->Decode.capcode-2029568;
-                if(groupbit < 0) return;
-
-                int endpoint = flex->GroupHandler.GroupCodes[groupbit][CAPCODES_INDEX];
-                for(int g = 1; g <= endpoint;g++)
-                {
-                        verbprintf(1, "FLEX Group message output: Groupbit: %i Total Capcodes; %i; index %i; Capcode: [%09lld]\n", groupbit, endpoint, g, flex->GroupHandler.GroupCodes[groupbit][g]);
-
-                        verbprintf(0,  "FLEX: %04i-%02i-%02i %02i:%02i:%02i %i/%i/%c/%c %02i.%03i [%09lld] ALN ", gmt->tm_year+1900, gmt->tm_mon+1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec,
-                                        flex->Sync.baud, flex->Sync.levels, frag_flag, PhaseNo, flex->FIW.cycleno, flex->FIW.frameno, flex->GroupHandler.GroupCodes[groupbit][g]);
-
-                        verbprintf(0, "%s\n", message);
-                }
-                // reset the value
-                flex->GroupHandler.GroupCodes[groupbit][CAPCODES_INDEX] = 0;
-    flex->GroupHandler.GroupFrame[groupbit] = -1;
-    flex->GroupHandler.GroupCycle[groupbit] = -1;
-        }
-*/
-
   // Implemented bierviltje code from ticket: https://github.com/EliasOenal/multimon-ng/issues/123#
   static char pt_out[4096] = {0};
   int pt_offset = sprintf(pt_out, "FLEX|%04i-%02i-%02i %02i:%02i:%02i|%i/%i/%c/%c|%02i.%03i|%09lld",
@@ -647,16 +627,31 @@ static void parse_alphanumeric(struct Flex *flex, unsigned int *phaseptr, char P
     for (int g = 1; g <= endpoint; g++)
     {
       verbprintf(1, "FLEX Group message output: Groupbit: %i Total Capcodes; %i; index %i; Capcode: [%09lld]\n", groupbit, endpoint, g, flex->GroupHandler.GroupCodes[groupbit][g]);
-      pt_offset += sprintf(pt_out + pt_offset, " %09lld", flex->GroupHandler.GroupCodes[groupbit][g]);
+		  if(GroupCalls == 0) {
+				//onder aangezet
+        verbprintf(0,  "FLEX|%04i-%02i-%02i %02i %02i:%02i|%i/%i/%c/%c|%02i.%03i|%09lld|ALN|%s\n",
+        								gmt->tm_year+1900, gmt->tm_mon+1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec,
+                        flex->Sync.baud, flex->Sync.levels, frag_flag, PhaseNo, flex->FIW.cycleno, flex->FIW.frameno, flex->GroupHandler.GroupCodes[groupbit][g],
+                        message);
+				// boven aan gezet 
+      }
+      else
+     	{
+      	pt_offset += sprintf(pt_out + pt_offset, " %09lld", flex->GroupHandler.GroupCodes[groupbit][g]);
+    	}
     }
-
+    
     // reset the value
     flex->GroupHandler.GroupCodes[groupbit][CAPCODES_INDEX] = 0;
     flex->GroupHandler.GroupFrame[groupbit] = -1;
     flex->GroupHandler.GroupCycle[groupbit] = -1;
   }
-  pt_offset += sprintf(pt_out + pt_offset, "|ALN|%s\n", message);
-  verbprintf(0, pt_out);
+  
+  if(GroupCalls == 1 || flex_groupmessage != 1) { // Single line or not a group message
+  	pt_offset += sprintf(pt_out + pt_offset, "|ALN|%s\n", message);
+  	verbprintf(0, pt_out);
+  }
+  
 }
 
 static void parse_numeric(struct Flex *flex, unsigned int *phaseptr, char PhaseNo, int j)
@@ -672,7 +667,7 @@ static void parse_numeric(struct Flex *flex, unsigned int *phaseptr, char PhaseN
 
   time_t now = time(NULL);
   struct tm *gmt = gmtime(&now);
-  verbprintf(0, "FLEX: %04i-%02i-%02i %02i:%02i:%02i %i/%i/%c %02i.%03i [%09lld] NUM ", gmt->tm_year + 1900, gmt->tm_mon + 1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec,
+  verbprintf(0, "FLEX|%04i-%02i-%02i %02i:%02i:%02i|%i/%i/%c|%02i.%03i|%09lld|NUM|", gmt->tm_year + 1900, gmt->tm_mon + 1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec,
              flex->Sync.baud, flex->Sync.levels, PhaseNo, flex->FIW.cycleno, flex->FIW.frameno, flex->Decode.capcode);
 
   // Get first dataword from message field or from second
@@ -727,14 +722,6 @@ static void parse_numeric(struct Flex *flex, unsigned int *phaseptr, char PhaseN
   verbprintf(0, "\n");
 }
 
-//static void parse_tone_only(struct Flex * flex, char PhaseNo) {
-//  if (flex==NULL) return;
-//  time_t now=time(NULL);
-//  struct tm * gmt=gmtime(&now);
-//  verbprintf(0,  "FLEX: %04i-%02i-%02i %02i:%02i:%02i %i/%i/%c %02i.%03i [%09lld] TON\n", gmt->tm_year+1900, gmt->tm_mon+1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec,
-//      flex->Sync.baud, flex->Sync.levels, PhaseNo, flex->FIW.cycleno, flex->FIW.frameno, flex->Decode.capcode);
-//}
-
 static void parse_tone_only(struct Flex *flex, unsigned int *phaseptr, char PhaseNo, int j)
 {
   if (flex == NULL)
@@ -743,7 +730,7 @@ static void parse_tone_only(struct Flex *flex, unsigned int *phaseptr, char Phas
 
   time_t now = time(NULL);
   struct tm *gmt = gmtime(&now);
-  verbprintf(0, "FLEX: %04i-%02i-%02i %02i:%02i:%02i %i/%i/%c %02i.%03i [%09lld] TON ", gmt->tm_year + 1900, gmt->tm_mon + 1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec, flex->Sync.baud, flex->Sync.levels, PhaseNo, flex->FIW.cycleno, flex->FIW.frameno, flex->Decode.capcode);
+  verbprintf(0, "FLEX|%04i-%02i-%02i %02i:%02i:%02i|%i/%i/%c|%02i.%03i|%09lld|TON|", gmt->tm_year + 1900, gmt->tm_mon + 1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec, flex->Sync.baud, flex->Sync.levels, PhaseNo, flex->FIW.cycleno, flex->FIW.frameno, flex->Decode.capcode);
 
   // message type
   // 1=tone-only, 0=short numeric
@@ -776,7 +763,7 @@ static void parse_unknown(struct Flex *flex, unsigned int *phaseptr, char PhaseN
     return;
   time_t now = time(NULL);
   struct tm *gmt = gmtime(&now);
-  verbprintf(0, "FLEX: %04i-%02i-%02i %02i:%02i:%02i %i/%i/%c %02i.%03i [%09lld] UNK", gmt->tm_year + 1900, gmt->tm_mon + 1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec,
+  verbprintf(0, "FLEX|%04i-%02i-%02i %02i:%02i:%02i|%i/%i/%c|%02i.%03i|%09lld|UNK|", gmt->tm_year + 1900, gmt->tm_mon + 1, gmt->tm_mday, gmt->tm_hour, gmt->tm_min, gmt->tm_sec,
              flex->Sync.baud, flex->Sync.levels, PhaseNo, flex->FIW.cycleno, flex->FIW.frameno, flex->Decode.capcode);
 
   int i;
